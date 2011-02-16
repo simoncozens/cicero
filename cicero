@@ -1,0 +1,12 @@
+#!/usr/bin/perl
+use lib 'lib';
+use Cicero;
+Cicero::StreamParser->parse("inicicero.cic");
+push @PDF::API2::FontDirs, @{$Cicero::stash->get("fontdirs")};
+my $input = shift;
+my $output = $input;
+$output =~ s/\.cic$/.pdf/ && $Cicero::stash->set("output", $output);
+Cicero::begin();
+Cicero->newpage();
+Cicero::StreamParser->parse($input);
+Cicero::finish();
