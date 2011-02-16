@@ -28,6 +28,25 @@ sub alter_space {
     if ($spacecode) { $spacefactor = $spacecode }
 }
 
+sub _add_space_justify {
+    my ($self, $nodes_r, $final) = @_;
+    if ($final) {
+        push @{$nodes_r}, 
+           $self->glueclass->new(
+               width => 0,
+               stretch => $self->infinity,
+               shrink => 0),
+           $self->penaltyclass->new(width => 0, penalty => -$self->infinity, flagged => 1);
+    } else {
+       push @{$nodes_r}, $self->glueclass->new(
+               width => $self->{spacewidth} * $spacefactor / 1000,
+               stretch => $self->{spacestretch},
+               shrink => $self->{spaceshrink}
+           );
+   }
+}
+
+
 sub break_text_into_nodes {
     my ($self, $text, $t, $ff, $style) = @_;
     $self->{ligengine} = Font::TTF::OpenTypeLigatures->new($ff);
@@ -72,8 +91,7 @@ sub break_text_into_nodes {
             for (@chars) { $stream->($_); }
             $stream->(-1);
             if ($_ != $#elems) {
-                push @nodes, Cicero::KP::Penalty->new(
-                    flagged => 1, penalty => $self->hyphenpenalty);
+                Cicero::penalty(flagged => 1, penalty => $self->hyphenpenalty);
             }
             $self->alter_space($w);
         }
@@ -118,16 +136,11 @@ sub flush {
 
 sub leave_hmode {
     my $self = shift;
-    pop @nodes while @nodes and 
-        ($nodes[-1]->is_penalty or $nodes[-1]->is_glue);
+    #pop @nodes while @nodes and 
+    #    ($nodes[-1]->is_penalty or $nodes[-1]->is_glue);
 
     my $t = $self->_typesetter;
-    push @nodes,
-        Cicero::KP::Penalty->new(penalty => $t->infinity),
-        Cicero::KP::Glue->new(width => 0, stretch => $t->infinity),
-        Cicero::KP::Penalty->new(penalty => -$t->infinity)
-        ;
-
+    $t->_add_space_justify(\@nodes,1);
     $t->tolerance($Cicero::stash->get("tolerance"));
     my @breakpoints = ();
     @breakpoints = $t->break(\@nodes);
@@ -156,7 +169,8 @@ sub typeset {
     return unless @{$line->{nodes}};
     # Discard the discardables
     while ($line->{nodes}[-1] and
-        $line->{nodes}[-1]->isa("Cicero::KP::Glue")
+        $line->{nodes}[-1]->isa("Cicero::KP::Penalty")
+        and !$line->{nodes}[-1]->flagged
         ) {
         pop @{$line->{nodes}}
     }
