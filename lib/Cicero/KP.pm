@@ -3,6 +3,7 @@ our %widthcache;
 our @nodes;
 our @output;
 use Font::TTF::Font;
+use Font::TTF::OpenTypeLigatures;
 use strict;
 use base 'Text::KnuthPlass';
 
@@ -14,33 +15,6 @@ sub glueclass { "Cicero::KP::Glue" }
 sub penaltyclass { "Cicero::KP::Penalty" }
 my %ligcache;
 our $spacefactor;
-sub lig_table {
-    my ($self, $ff) = @_;
-    $ligcache{$ff} ||= do {
-        my $f = Font::TTF::Font->open($ff);
-        $f->read;
-        $f->{GSUB}->read;
-        my @ligtable;
-        my @features = grep /liga/, 
-            @{$f->{GSUB}{SCRIPTS}{latn}{DEFAULT}{FEATURES}};
-        my @ligs = 
-                    grep { $_->{TYPE} == 4 }
-                    map { $f->{GSUB}{LOOKUP}[$_] }
-                     map { @{ $f->{GSUB}{FEATURES}{$_}{LOOKUPS} } }
-                      @features;
-        for my $lig (@ligs) {
-            for (@{$lig->{SUB}}) {
-                while (my ($k, $v) = each %{$_->{COVERAGE}{val}}) {
-                    for (@{$_->{RULES}[$v]}) {
-                    push @{$ligtable[$k]}, 
-                        join(",",@{$_->{MATCH}})." => ".join(",",@{$_->{ACTION}});
-                    }
-                }
-            }
-        }
-        \@ligtable;
-    }
-}
 
 sub alter_space {
     my $spacecode = 1000;
@@ -56,7 +30,7 @@ sub alter_space {
 
 sub break_text_into_nodes {
     my ($self, $text, $t, $ff, $style) = @_;
-    my $lig_table = $self->lig_table($ff);
+    $self->{ligengine} = Font::TTF::OpenTypeLigatures->new($ff);
     my @nodes;
     $self->{emwidth}    = $self->measure->("M");
     $self->{spacewidth} = $self->measure->(" ");
@@ -64,60 +38,47 @@ sub break_text_into_nodes {
     $self->{spacestretch} = $self->{spacewidth} * $self->space->{width} / $self->space->{stretch};
     $self->{spaceshrink} = $self->{spacewidth} * $self->space->{width} / $self->space->{shrink};
     my $font = $t->{' font'};
-    our $last = 0;
-    my $add_word = sub { 
-        my $word = shift;
+    our $lastglyph = 0;
+    my $k;
+    my $output = sub {
+        my $l = shift;
+        my $width = $widthcache{$l} ||= $font->wxByCId($l);
+        $width -= $k if $k = $font->kernPairCid($lastglyph, $l);
+        $width = $width / 1000 * $t->{' fontsize'};
+        $lastglyph = $l;
+        push @nodes, Cicero::KP::HBox->new(
+            value => 
+                { 
+                    glyph     => pack("n*", $l),
+                    fontname  => $Cicero::stash->get("fontname"),
+                    color     => $Cicero::stash->get("color"),
+                    debug     => $font->uniByCId($l)
+                },
+            height => $Cicero::stash->get("fontsize"),
+            depth  => $Cicero::stash->get("lead")-$Cicero::stash->get("fontsize"),
+            width => $width
+        );
+    };
+    for (0..$#words) { 
+        my $word = $words[$_];
         my @elems = $self->hyphenator->hyphenate($word);
-        my $lastglyph = 0;
+        my $stream = $self->{ligengine}->stream($output);
         for (0..$#elems) { 
             my $w = $elems[$_];
             my @chars = 
                 map { $font->cidByUni(ord $_) }
-                map { $_ eq "~" ? " " : $_ }
-                split //, $w;
-            while (@chars) {
-                my $l = shift @chars;
-                if ($lig_table->[$l]) { 
-                    for my $ligrule (@{$lig_table->[$l]}) {
-                        my ($k, $v) = split / => /, $ligrule;
-                        my $length = split /,/,$k;
-                        my @replace = split /,/,$v;
-                        if ($k eq join ",", @chars[0..$length-1]) {
-                            $l = shift @replace;
-                            splice @chars, 0, $length, @replace; 
-                        }
-                    }
-                }
-                # Kern
-                my $width = $widthcache{$l} ||= $font->wxByCId($l);
-                if (my $k = $font->kernPairCid($last, $l)) { $width -= $k; warn "Kerned" }
-                $width = $width / 1000 * $t->{' fontsize'};
-                $last = $l;
-                push @nodes, Cicero::KP::HBox->new(
-                    value => 
-                        { 
-                            glyph     => pack("n*", $l),
-                            fontname  => $Cicero::stash->get("fontname"),
-                            color     => $Cicero::stash->get("color"),
-                            debug     => $font->uniByCId($l)
-                        },
-                    height => $Cicero::stash->get("fontsize"),
-                    depth  => $Cicero::stash->get("lead")-$Cicero::stash->get("fontsize"),
-                    width => $width
-
-                );
-            }
+                    map { $_ eq "~" ? " " : $_ }
+                    split //, $w;
+            for (@chars) { $stream->($_); }
+            $stream->(-1);
             if ($_ != $#elems) {
                 push @nodes, Cicero::KP::Penalty->new(
                     flagged => 1, penalty => $self->hyphenpenalty);
             }
             $self->alter_space($w);
         }
-    };
-     for (0..$#words) { my $word = $words[$_];
-         $add_word->($word);
-         $self->_add_space_justify(\@nodes,0);
-     }
+        $self->_add_space_justify(\@nodes,0);
+    }
     return @nodes;
 }
 
