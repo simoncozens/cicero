@@ -17,6 +17,7 @@ sub begin {
 sub newpage {
     $page = $pdf->page;
     $text = $page->text;
+    $stash->set("pageno", $stash->get("pageno")+1);
     shift->initialize(@_);
 }
 
@@ -40,7 +41,7 @@ sub setfont {
     $fontsize = $stash->get("fontsize") if !$fontsize;
     $text->fillcolor($color) if $color and $color ne $lastcolor;
     $lastcolor = $color;
-    if ($fontname ne $lastfont or $fontsize != $lastsize) {
+    if (!$text->{' font'} or $fontname ne $lastfont or $fontsize != $lastsize) {
         $font = $fontcache{$fontname} ||= $pdf->ttfont($fontname);
         $text->font($font , $fontsize);
         $lastsize = $fontsize; $lastfont = $fontname;

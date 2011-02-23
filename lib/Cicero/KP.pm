@@ -1,12 +1,13 @@
 package Cicero::KP;
+our $finishing;
 our %widthcache;
 our @nodes;
+our @page;
 our @output;
 use Font::TTF::Font;
 use Font::TTF::OpenTypeLigatures;
 use strict;
 use base 'Text::KnuthPlass';
-
 use Text::Hyphen;
 our $hyph = Text::Hyphen->new;
 #our $hyph = Text::KnuthPlass::DummyHyphenator->new;
@@ -15,6 +16,8 @@ sub glueclass { "Cicero::KP::Glue" }
 sub penaltyclass { "Cicero::KP::Penalty" }
 my %ligcache;
 our $spacefactor;
+our %pagetotals;
+our @thispage;
 
 sub alter_space {
     my $spacecode = 1000;
@@ -71,7 +74,7 @@ sub break_text_into_nodes {
                     glyph     => pack("n*", $l),
                     fontname  => $Cicero::stash->get("fontname"),
                     color     => $Cicero::stash->get("color"),
-                    debug     => $font->uniByCId($l)
+                    debug     => chr $font->uniByCId($l)
                 },
             height => $Cicero::stash->get("fontsize"),
             depth  => $Cicero::stash->get("lead")-$Cicero::stash->get("fontsize"),
@@ -127,11 +130,32 @@ sub _typesetter {
     );
 }
 
-sub flush {
+{ our $last_badness = ~0; 
+sub page_builder {
     while (my $vbox = shift @output) {
-        $vbox->typeset();
-        # Bottom of page?
+        $pagetotals{height} += $vbox->height + $vbox->depth
+            if $vbox->isa("Cicero::KP::VBox") or
+               $vbox->isa("Cicero::KP::VGlue");
+        if ($vbox->isa("Cicero::KP::Penalty")) {
+            my $left = $Cicero::cursor_y - $pagetotals{height};
+            my $badness = $left > 0 ? $left**3 : 10000;
+            my $c = $badness < 10000 ? $vbox->penalty + $badness : 10000;
+            if ($c > $last_badness) {
+                shipout();
+                $last_badness = ~0;
+            } else { $last_badness = $c }
+        }
+        push @page, $vbox;
     }
+}
+}
+
+sub shipout {
+    $_->typeset for @page;
+    print " [".$Cicero::stash->get("pageno")."]";
+    @page = ();
+    Cicero->newpage() unless $finishing;
+    $pagetotals{height} = 0;
 }
 
 sub leave_hmode {
@@ -147,16 +171,25 @@ sub leave_hmode {
     if (!@breakpoints) { die "Couldn't set text at this tolerance" }
     return unless @breakpoints;
     my @lines = $t->breakpoints_to_lines(\@breakpoints, \@nodes);
-    for my $line (@lines) {
-        shift @nodes for @{$line->{nodes}};
-        push @output, bless $line, "Cicero::KP::VBox";
+    for (0..$#lines) {
+        shift @nodes for @{$lines[$_]->{nodes}};
+        push @output, bless $lines[$_], "Cicero::KP::VBox";
+        if ($_ == 0) {
+            push @output, Cicero::KP::Penalty->new(penalty => 150);
+        } elsif ($_ == $#lines-1) {
+            push @output, Cicero::KP::Penalty->new(penalty => 150);
+        } else {
+            push @output, Cicero::KP::Penalty->new(penalty => 0);
+        }
     }
-    $self->flush();
+    $self->page_builder();
 }
 
 sub finish {
-    warn "Finishing";
+    $finishing = 1;
     if (@nodes) { shift->leave_hmode }
+    if (@page)  { shipout() }
+    print "\n";
 }
 
 package Cicero::KP::VBox;
@@ -216,4 +249,7 @@ sub typeset {}
 
 1;
 
+package Cicero::KP::VGlue;
+use base 'Cicero::KP::Glue';
+sub depth { 0 }
 1;
