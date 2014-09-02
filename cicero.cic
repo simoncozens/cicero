@@ -1,0 +1,2 @@
+[% color = "black"; lead = 14 %]This text is typeset by the Cicero
+[%PERL%] glue(width => 0, stretch => 1000, shrink => 0) [%END%] document processing system.
