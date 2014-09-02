@@ -1,5 +1,6 @@
 #!/usr/bin/perl
 use lib 'lib';
+$|=1;
 use Cicero;
 Cicero::StreamParser->parse("inicicero.cic");
 push @PDF::API2::FontDirs, @{$Cicero::stash->get("fontdirs")};

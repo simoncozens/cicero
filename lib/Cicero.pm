@@ -56,11 +56,13 @@ sub typeset {
     for (split /(\n\n)/, $paragraph) {
         if ($_ eq "\n\n") { 
             Cicero::KP->leave_hmode();
+            Cicero::KP->add_parskip();
         } else { Cicero::KP->setpar($_) }
     }
 }
 
 sub glue    { push @Cicero::KP::nodes, Cicero::KP::Glue->new(@_)    }
+sub vglue   { push @Cicero::KP::page, Cicero::KP::VGlue->new(@_)    }
 sub penalty { push @Cicero::KP::nodes, Cicero::KP::Penalty->new(@_) }
 
 sub finish {

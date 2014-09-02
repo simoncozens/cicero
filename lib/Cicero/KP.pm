@@ -6,11 +6,12 @@ our @page;
 our @output;
 use Font::TTF::Font;
 use Font::TTF::OpenTypeLigatures;
+use List::Util qw/sum/;
 use strict;
 use base 'Text::KnuthPlass';
 use Text::Hyphen;
-our $hyph = Text::Hyphen->new;
-#our $hyph = Text::KnuthPlass::DummyHyphenator->new;
+#our $hyph = Text::Hyphen->new;
+our $hyph = Text::KnuthPlass::DummyHyphenator->new;
 
 sub glueclass { "Cicero::KP::Glue" }
 sub penaltyclass { "Cicero::KP::Penalty" }
@@ -48,7 +49,6 @@ sub _add_space_justify {
            );
    }
 }
-
 
 sub break_text_into_nodes {
     my ($self, $text, $t, $ff, $style) = @_;
@@ -132,16 +132,18 @@ sub _typesetter {
 
 { our $last_badness = ~0; 
 sub page_builder {
+    my $target = $Cicero::cursor_y -20 ;
+    #warn "Calling the page builder, ".(0+@output)." lines to set\n";
     while (my $vbox = shift @output) {
         $pagetotals{height} += $vbox->height + $vbox->depth
             if $vbox->isa("Cicero::KP::VBox") or
                $vbox->isa("Cicero::KP::VGlue");
         if ($vbox->isa("Cicero::KP::Penalty")) {
-            my $left = $Cicero::cursor_y - $pagetotals{height};
+            my $left = $target - $pagetotals{height};
             my $badness = $left > 0 ? $left**3 : 10000;
             my $c = $badness < 10000 ? $vbox->penalty + $badness : 10000;
             if ($c > $last_badness) {
-                shipout();
+                shipout($target);
                 $last_badness = ~0;
             } else { $last_badness = $c }
         }
@@ -151,7 +153,14 @@ sub page_builder {
 }
 
 sub shipout {
-    $_->typeset for @page;
+    my $target = shift;
+    my $adjustment = $pagetotals{height} - $target;
+    my @glues = grep { $_->isa("Cicero::KP::VGlue") } @page;
+    my $total_stretch = sum( map { $_->stretch } @glues);
+    $adjustment = $total_stretch  if $adjustment > $total_stretch;
+    # Vglue doesn't shrink, but if it did, we'd handle it here
+    for (@glues) { $_->set_glue($_->stretch/$total_stretch * $adjustment) }
+    for (@page) { $_->typeset; }
     print " [".$Cicero::stash->get("pageno")."]";
     @page = ();
     Cicero->newpage() unless $finishing;
@@ -160,15 +169,19 @@ sub shipout {
 
 sub leave_hmode {
     my $self = shift;
-    #pop @nodes while @nodes and 
-    #    ($nodes[-1]->is_penalty or $nodes[-1]->is_glue);
-
+    pop @nodes while @nodes and 
+        ($nodes[-1]->is_penalty or $nodes[-1]->is_glue);
     my $t = $self->_typesetter;
     $t->_add_space_justify(\@nodes,1);
     $t->tolerance($Cicero::stash->get("tolerance"));
+    my $handle;
     my @breakpoints = ();
     @breakpoints = $t->break(\@nodes);
-    if (!@breakpoints) { die "Couldn't set text at this tolerance" }
+    if (!@breakpoints) { 
+        shipout();
+        $Cicero::pdf->save();
+        die "Couldn't set text at this tolerance ".join" ", map{ $_->_txt} @nodes;
+    }
     return unless @breakpoints;
     my @lines = $t->breakpoints_to_lines(\@breakpoints, \@nodes);
     for (0..$#lines) {
@@ -192,6 +205,9 @@ sub finish {
     print "\n";
 }
 
+sub add_parskip {
+    Cicero::vglue(height => 0, stretch => 1);
+}
 package Cicero::KP::VBox;
 use List::Util qw/max/;
 sub depth { max map { $_->isa("Cicero::KP::HBox") && $_->depth } @{shift->{nodes}}; }
@@ -211,7 +227,10 @@ sub typeset {
         #next unless $node;
         $node->typeset($line);
     }
-    if ($line->{nodes}[-1]->is_penalty) { $Cicero::text->text("-") }
+    if ($line->{nodes}[-1]->is_penalty and
+        $line->{nodes}[-1]->penalty != -10000) { 
+        $Cicero::text->text("-") 
+    }
     $Cicero::cursor_y -= $line->depth + $line->height;
 }
 sub _txt { join "", map {$_->_txt} @{shift->{nodes}} }
@@ -251,5 +270,15 @@ sub typeset {}
 
 package Cicero::KP::VGlue;
 use base 'Cicero::KP::Glue';
-sub depth { 0 }
+__PACKAGE__->mk_accessors(qw/height/);
+
+sub _txt { "V".$_[0]->height."+".$_[0]->stretch."-".$_[0]->shrink }
+sub set_glue {
+    my ($self, $adjustment) = @_; 
+    $self->height($self->height + $adjustment); $self->stretch(0);
+}
+sub typeset { 
+    my $self = shift;
+    $Cicero::cursor_y -= $self->height;
+} 
 1;
